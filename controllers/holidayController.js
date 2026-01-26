@@ -1,4 +1,5 @@
 const Holiday = require('../models/Holiday');
+const { markHolidaysForAllEmployees } = require('../utils/attendanceHelper');
 
 // @desc    Add a holiday
 // @route   POST /api/holidays
@@ -14,6 +15,9 @@ const addHoliday = async (req, res) => {
       isPaid,
       description,
     });
+
+    // Auto-mark this day as holiday for all employees
+    await markHolidaysForAllEmployees(date);
 
     res.status(201).json(holiday);
   } catch (error) {
