@@ -18,12 +18,26 @@ const userSchema = mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['Admin', 'HR', 'Employee'],
+      enum: ['Admin', 'HR', 'Business Lead', 'Team Lead', 'Employee'],
       default: 'Employee',
     },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
+    },
+    // Reporting structure
+    reportsTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    // For Team Leads and Business Leads - who reports to them
+    manages: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    isActive: {
+      type: Boolean,
+      default: true,
     },
   },
   {

@@ -1,4 +1,4 @@
-const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');  
 const User = require('../models/User');
 
 const protect = async (req, res, next) => {
@@ -21,7 +21,6 @@ const protect = async (req, res, next) => {
       return res.status(401).json({ message: 'Not authorized, token failed' });
     }
   } else {
-    // Changed: moved this into else block and added return
     return res.status(401).json({ message: 'Not authorized, no token' });
   }
 };
@@ -30,7 +29,7 @@ const admin = (req, res, next) => {
   if (req.user && req.user.role === 'Admin') {
     next();
   } else {
-    res.status(403).json({ message: 'Not authorized as an admin' }); // Changed to 403
+    res.status(403).json({ message: 'Not authorized as an admin' });
   }
 };
 
@@ -38,7 +37,7 @@ const hr = (req, res, next) => {
   if (req.user && (req.user.role === 'HR' || req.user.role === 'Admin')) {
     next();
   } else {
-    res.status(403).json({ message: 'Not authorized as HR' }); // Changed to 403
+    res.status(403).json({ message: 'Not authorized as HR' });
   }
 };
 
