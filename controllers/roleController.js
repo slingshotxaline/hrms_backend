@@ -233,7 +233,7 @@ const removeManager = async (req, res) => {
 // @access  Private
 const getMyTeam = async (req, res) => {
   try {
-    console.log(`=== GET MY TEAM: ${req.user.email} ===`);
+    console.log(`=== GET MY TEAM: ${req.user.email} (${req.user.role}) ===`);
 
     const user = await User.findById(req.user._id)
       .populate({
@@ -250,6 +250,7 @@ const getMyTeam = async (req, res) => {
     }
 
     console.log(`User has ${user.manages?.length || 0} team members`);
+    console.log('Team members:', user.manages?.map(m => m.name));
 
     res.json({
       role: user.role,
@@ -325,6 +326,7 @@ const bulkAssignToManager = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 module.exports = {
   getAllUsersWithHierarchy,
