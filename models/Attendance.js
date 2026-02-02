@@ -30,6 +30,28 @@ const attendanceSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // ✅ New fields for enhanced tracking
+    timingStatus: {
+      type: String,
+      enum: ['Early', 'On Time', 'On Time (Grace)', 'Late', 'Half Day'],
+      default: 'On Time',
+    },
+    isEarly: {
+      type: Boolean,
+      default: false,
+    },
+    earlyMinutes: {
+      type: Number,
+      default: 0,
+    },
+    usedGracePeriod: {
+      type: Boolean,
+      default: false,
+    },
+    isHalfDay: {
+      type: Boolean,
+      default: false,
+    },
     isEdited: {
       type: Boolean,
       default: false,
@@ -38,13 +60,13 @@ const attendanceSchema = mongoose.Schema(
       {
         modifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         modifiedAt: { type: Date, default: Date.now },
-        previousValue: { type: Object }, // Store snapshot of before change
+        previousValue: { type: Object },
         reason: { type: String },
       },
     ],
     isLocked: {
       type: Boolean,
-      default: false, // Locked after payroll generation
+      default: false,
     }
   },
   {
