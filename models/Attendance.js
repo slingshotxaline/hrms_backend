@@ -11,12 +11,34 @@ const attendanceSchema = mongoose.Schema(
       type: Date,
       required: true,
     },
+    // ✅ First punch IN (office entry)
     inTime: {
       type: Date,
     },
+    // ✅ Last punch OUT (office exit)
     outTime: {
       type: Date,
     },
+    // ✅ All punches throughout the day
+    punches: [
+      {
+        timestamp: {
+          type: Date,
+          required: true,
+        },
+        type: {
+          type: String,
+          enum: ['IN', 'OUT'],
+          required: true,
+        },
+        location: {
+          type: String,
+        },
+        deviceId: {
+          type: String,
+        },
+      }
+    ],
     status: {
       type: String,
       enum: ['Present', 'Absent', 'Leave', 'Holiday', 'Weekend'],
@@ -30,7 +52,16 @@ const attendanceSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
-    // ✅ New fields for enhanced tracking
+    // ✅ Total break time (time between OUT and next IN)
+    totalBreakMinutes: {
+      type: Number,
+      default: 0,
+    },
+    // ✅ Net working hours (total time - breaks)
+    netWorkingMinutes: {
+      type: Number,
+      default: 0,
+    },
     timingStatus: {
       type: String,
       enum: ['Early', 'On Time', 'On Time (Grace)', 'Late', 'Half Day'],
@@ -51,6 +82,18 @@ const attendanceSchema = mongoose.Schema(
     isHalfDay: {
       type: Boolean,
       default: false,
+    },
+    hasOvertime: {
+      type: Boolean,
+      default: false,
+    },
+    earlyLeave: {
+      type: Boolean,
+      default: false,
+    },
+    earlyLeaveMinutes: {
+      type: Number,
+      default: 0,
     },
     isEdited: {
       type: Boolean,
