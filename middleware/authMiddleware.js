@@ -41,4 +41,5 @@ const hr = (req, res, next) => {
   }
 };
 
+
 module.exports = { protect, admin, hr };

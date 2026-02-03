@@ -1,46 +1,73 @@
 const Employee = require('../models/Employee');
 const User = require('../models/User');
 
-// @desc    Create a new employee
+// @desc    Create new employee
 // @route   POST /api/employees
 // @access  Private/Admin/HR
 const createEmployee = async (req, res) => {
   try {
     const {
+      employeeCode,
       firstName,
       lastName,
-      employeeCode,
+      email,
+      phone,
+      dateOfBirth,
+      dateOfJoining,
       department,
       designation,
-      joiningDate,
-      basicSalary,
+      salary,
+      bankAccount,
+      address,
+      emergencyContact,
       allowances,
       shiftStart,
       shiftEnd,
-      email, // Optional: if linking to a user immediately or creating a user
     } = req.body;
 
-    const employeeExists = await Employee.findOne({ employeeCode });
+    // Check if employee code or email already exists
+    const employeeExists = await Employee.findOne({
+      $or: [{ employeeCode }, { email }],
+    });
 
     if (employeeExists) {
-      return res.status(400).json({ message: 'Employee with this code already exists' });
+      return res.status(400).json({
+        message: 'Employee with this code or email already exists',
+      });
     }
 
+    // ✅ Create employee with default leave balance
     const employee = await Employee.create({
+      employeeCode,
       firstName,
       lastName,
-      employeeCode,
+      email,
+      phone,
+      dateOfBirth,
+      dateOfJoining,
       department,
       designation,
-      joiningDate,
-      basicSalary,
+      salary,
+      bankAccount,
+      address,
+      emergencyContact,
       allowances,
-      shiftStart,
-      shiftEnd,
+      shiftStart: shiftStart || '09:00',
+      shiftEnd: shiftEnd || '18:00',
+      // ✅ Ensure leave balance is initialized
+      leaveBalance: {
+        casual: 12,
+        sick: 12,
+        earned: 15,
+        unpaid: 0,
+      },
     });
+
+    console.log(`✅ Created employee: ${employee.firstName} ${employee.lastName} with leave balance initialized`);
 
     res.status(201).json(employee);
   } catch (error) {
+    console.error('Error creating employee:', error);
     res.status(500).json({ message: error.message });
   }
 };

@@ -2,10 +2,6 @@ const mongoose = require('mongoose');
 
 const employeeSchema = mongoose.Schema(
   {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
     employeeCode: {
       type: String,
       required: true,
@@ -19,6 +15,21 @@ const employeeSchema = mongoose.Schema(
       type: String,
       required: true,
     },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    phone: {
+      type: String,
+    },
+    dateOfBirth: {
+      type: Date,
+    },
+    dateOfJoining: {
+      type: Date,
+      required: true,
+    },
     department: {
       type: String,
       required: true,
@@ -27,29 +38,71 @@ const employeeSchema = mongoose.Schema(
       type: String,
       required: true,
     },
-    joiningDate: {
-      type: Date,
-      required: true,
-    },
-    basicSalary: {
+    salary: {
       type: Number,
       required: true,
-      default: 0,
+    },
+    bankAccount: {
+      accountNumber: String,
+      bankName: String,
+      ifscCode: String,
+    },
+    address: {
+      street: String,
+      city: String,
+      state: String,
+      pincode: String,
+      country: String,
+    },
+    emergencyContact: {
+      name: String,
+      relationship: String,
+      phone: String,
+    },
+    // ✅ Leave Balance with default values
+    leaveBalance: {
+      casual: {
+        type: Number,
+        default: 12, // ✅ Default 12 casual leaves
+      },
+      sick: {
+        type: Number,
+        default: 12, // ✅ Default 12 sick leaves
+      },
+      earned: {
+        type: Number,
+        default: 15, // ✅ Default 15 earned leaves
+      },
+      unpaid: {
+        type: Number,
+        default: 0,
+      },
     },
     allowances: {
-      houseRent: { type: Number, default: 0 },
-      medical: { type: Number, default: 0 },
-      transport: { type: Number, default: 0 },
+      hra: {
+        type: Number,
+        default: 0,
+      },
+      transport: {
+        type: Number,
+        default: 0,
+      },
+      medical: {
+        type: Number,
+        default: 0,
+      },
+      other: {
+        type: Number,
+        default: 0,
+      },
     },
     shiftStart: {
-      type: String, // Format "HH:mm"
-      required: true,
-      default: "09:00"
+      type: String,
+      default: '09:00',
     },
     shiftEnd: {
-      type: String, // Format "HH:mm"
-      required: true,
-      default: "18:00"
+      type: String,
+      default: '18:00',
     },
     isActive: {
       type: Boolean,

@@ -272,11 +272,19 @@ const getProfile = async (req, res) => {
       .select('-password')
       .populate({
         path: 'employeeId',
-        select: 'firstName lastName employeeCode department designation email phone'
+        select: 'firstName lastName employeeCode department designation email phone dateOfJoining dateOfBirth'
       })
       .populate({
         path: 'reportsTo',
-        select: 'name role' // ✅ Get manager name and role
+        select: 'name role'
+      })
+      .populate({
+        path: 'manages',
+        select: 'name email role',
+        populate: {
+          path: 'employeeId',
+          select: 'firstName lastName employeeCode department designation email phone dateOfJoining'
+        }
       });
 
     if (!user) {
@@ -289,8 +297,8 @@ const getProfile = async (req, res) => {
       email: user.email,
       role: user.role,
       employeeId: user.employeeId,
-      reportsTo: user.reportsTo, // ✅ Manager info
-      manages: user.manages,
+      reportsTo: user.reportsTo,
+      manages: user.manages, // ✅ Now includes full employee details
       isActive: user.isActive,
     });
   } catch (error) {
