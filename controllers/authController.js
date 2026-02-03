@@ -141,22 +141,39 @@ const registerUser = async (req, res) => {
   }
 };
 
-// @desc    Get user profile
+// @desc    Get user profile (OLD - keeping for compatibility)
 // @route   GET /api/auth/profile
 // @access  Private
 const getUserProfile = async (req, res) => {
-  const user = await User.findById(req.user._id).populate('employeeId');
+  try {
+    const user = await User.findById(req.user._id)
+      .select('-password')
+      .populate({
+        path: 'employeeId',
+        select: 'firstName lastName employeeCode department designation email phone'
+      })
+      .populate({
+        path: 'reportsTo',
+        select: 'name role' // ✅ Get manager name and role
+      });
 
-  if (user) {
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
     res.json({
       _id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
       employeeId: user.employeeId,
+      reportsTo: user.reportsTo, // ✅ Manager info
+      manages: user.manages,
+      isActive: user.isActive,
     });
-  } else {
-    res.status(404).json({ message: 'User not found' });
+  } catch (error) {
+    console.error('Error getting profile:', error);
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -246,4 +263,48 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { loginUser, registerUser, getUserProfile, updateProfile, updatePassword, resetPassword };
+// @desc    Get user profile (NEW - with full details)
+// @route   GET /api/auth/profile
+// @access  Private
+const getProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .select('-password')
+      .populate({
+        path: 'employeeId',
+        select: 'firstName lastName employeeCode department designation email phone'
+      })
+      .populate({
+        path: 'reportsTo',
+        select: 'name role' // ✅ Get manager name and role
+      });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      employeeId: user.employeeId,
+      reportsTo: user.reportsTo, // ✅ Manager info
+      manages: user.manages,
+      isActive: user.isActive,
+    });
+  } catch (error) {
+    console.error('Error getting profile:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { 
+  loginUser, 
+  registerUser, 
+  getUserProfile,
+  getProfile, 
+  updateProfile, 
+  updatePassword, 
+  resetPassword 
+};
