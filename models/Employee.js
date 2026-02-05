@@ -7,6 +7,11 @@ const employeeSchema = mongoose.Schema(
       required: true,
       unique: true,
     },
+     biometricId: {
+      type: String,
+      unique: true,
+      sparse: true, // Allows null values while maintaining uniqueness
+    },
     firstName: {
       type: String,
       required: true,

@@ -154,8 +154,8 @@ const getLeaves = async (req, res) => {
     const leaves = await Leave.find(query)
       .populate('employee', 'firstName lastName employeeCode department')
       .populate('user', 'name email role')
-      .populate('approvedBy', 'name role') // ✅ Populate who approved
-      .populate('approvers', 'name role') // ✅ Populate who can approve
+      .populate('approvedBy', 'name role')
+      .populate('approvers', 'name role')
       .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${leaves.length} leaves`);
@@ -208,8 +208,8 @@ const updateLeaveStatus = async (req, res) => {
 
     console.log(`🔄 Updating leave ${req.params.id} to ${status} by ${req.user.name} (${req.user.role})`);
 
+    // ✅ FIX: Don't populate employee, just get the reference
     const leave = await Leave.findById(req.params.id)
-      .populate('employee')
       .populate('user', 'name role')
       .populate('approvers');
 
@@ -242,16 +242,15 @@ const updateLeaveStatus = async (req, res) => {
     // Update leave status
     leave.status = status;
     leave.approvedBy = req.user._id;
-    leave.approvedByRole = req.user.role; // ✅ Store approver's role
+    leave.approvedByRole = req.user.role;
     leave.approvedAt = new Date();
 
     if (status === 'Rejected' && rejectionReason) {
       leave.rejectionReason = rejectionReason;
     }
 
-    // If approved, update employee leave balance
+    // ✅ If approved, update employee leave balance using findByIdAndUpdate
     if (status === 'Approved') {
-      const employee = leave.employee;
       const leaveTypeMap = {
         'Casual Leave': 'casual',
         'Sick Leave': 'sick',
@@ -261,14 +260,18 @@ const updateLeaveStatus = async (req, res) => {
 
       const leaveBalanceKey = leaveTypeMap[leave.leaveType];
       
-      if (leaveBalanceKey && leaveBalanceKey !== 'unpaid' && employee.leaveBalance[leaveBalanceKey] !== undefined) {
-        employee.leaveBalance[leaveBalanceKey] -= leave.totalDays;
+      if (leaveBalanceKey && leaveBalanceKey !== 'unpaid') {
+        // ✅ Use findByIdAndUpdate with $inc operator to avoid validation issues
+        await Employee.findByIdAndUpdate(
+          leave.employee,
+          {
+            $inc: {
+              [`leaveBalance.${leaveBalanceKey}`]: -leave.totalDays
+            }
+          },
+          { new: true }
+        );
         
-        if (employee.leaveBalance[leaveBalanceKey] < 0) {
-          employee.leaveBalance[leaveBalanceKey] = 0;
-        }
-        
-        await employee.save();
         console.log(`✅ Deducted ${leave.totalDays} days from ${leaveBalanceKey} leave`);
       }
     }
