@@ -7,10 +7,10 @@ const employeeSchema = mongoose.Schema(
       required: true,
       unique: true,
     },
-     biometricId: {
+    biometricId: {
       type: String,
       unique: true,
-      sparse: true, // Allows null values while maintaining uniqueness
+      sparse: true,
     },
     firstName: {
       type: String,
@@ -43,52 +43,16 @@ const employeeSchema = mongoose.Schema(
       type: String,
       required: true,
     },
-    salary: {
+    basicSalary: {
       type: Number,
       required: true,
     },
-    bankAccount: {
-      accountNumber: String,
-      bankName: String,
-      ifscCode: String,
-    },
-    address: {
-      street: String,
-      city: String,
-      state: String,
-      pincode: String,
-      country: String,
-    },
-    emergencyContact: {
-      name: String,
-      relationship: String,
-      phone: String,
-    },
-    // ✅ Leave Balance with default values
-    leaveBalance: {
-      casual: {
-        type: Number,
-        default: 12, // ✅ Default 12 casual leaves
-      },
-      sick: {
-        type: Number,
-        default: 12, // ✅ Default 12 sick leaves
-      },
-      earned: {
-        type: Number,
-        default: 15, // ✅ Default 15 earned leaves
-      },
-      unpaid: {
-        type: Number,
-        default: 0,
-      },
+    grossSalary: {
+      type: Number,
+      default: 0,
     },
     allowances: {
-      hra: {
-        type: Number,
-        default: 0,
-      },
-      transport: {
+      houseRent: {
         type: Number,
         default: 0,
       },
@@ -96,7 +60,7 @@ const employeeSchema = mongoose.Schema(
         type: Number,
         default: 0,
       },
-      other: {
+      transport: {
         type: Number,
         default: 0,
       },
@@ -109,15 +73,82 @@ const employeeSchema = mongoose.Schema(
       type: String,
       default: '18:00',
     },
+    address: {
+      type: String,
+    },
+    emergencyContact: {
+      name: {
+        type: String,
+      },
+      relationship: {
+        type: String,
+      },
+      phone: {
+        type: String,
+      },
+    },
+    leaveBalance: {
+      casual: {
+        type: Number,
+        default: 12,
+      },
+      sick: {
+        type: Number,
+        default: 12,
+      },
+      earned: {
+        type: Number,
+        default: 15,
+      },
+      unpaid: {
+        type: Number,
+        default: 0,
+      },
+    },
     isActive: {
       type: Boolean,
       default: true,
+    },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
     },
   },
   {
     timestamps: true,
   }
 );
+
+// ✅ FIXED: Pre-save hook with proper async/await handling
+employeeSchema.pre('save', async function() {
+  try {
+    // Calculate gross salary
+    if (this.isModified('basicSalary') || this.isModified('allowances')) {
+      const totalAllowances = 
+        (this.allowances?.houseRent || 0) + 
+        (this.allowances?.medical || 0) + 
+        (this.allowances?.transport || 0);
+      
+      this.grossSalary = (this.basicSalary || 0) + totalAllowances;
+    }
+
+    // ✅ Sync isActive status with User model (only if user exists and isActive changed)
+    if (this.isModified('isActive') && this.user) {
+      const User = mongoose.model('User');
+      await User.findByIdAndUpdate(
+        this.user,
+        { isActive: this.isActive },
+        { new: true }
+      );
+      console.log(`✅ Synced Employee.isActive (${this.isActive}) → User.isActive for ${this.firstName} ${this.lastName}`);
+    }
+  } catch (error) {
+    console.error('❌ Error in Employee pre-save hook:', error);
+    throw error; // Re-throw to prevent save if sync fails
+  }
+  
+  // ✅ No need to call next() - mongoose handles it automatically for async functions
+});
 
 const Employee = mongoose.model('Employee', employeeSchema);
 

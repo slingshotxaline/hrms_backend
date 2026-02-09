@@ -307,6 +307,40 @@ const getProfile = async (req, res) => {
   }
 };
 
+// @desc    Toggle user active status
+// @route   PUT /api/auth/users/:id/toggle-status
+// @access  Private/Admin
+const toggleUserStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Toggle the status
+    user.isActive = !user.isActive;
+    await user.save(); // This will trigger the pre-save hook to sync with Employee
+
+    console.log(`✅ User ${user.name} is now ${user.isActive ? 'ACTIVE' : 'INACTIVE'}`);
+
+    res.json({ 
+      message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+      }
+    });
+  } catch (error) {
+    console.error('Error toggling user status:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
 module.exports = { 
   loginUser, 
   registerUser, 
@@ -314,5 +348,6 @@ module.exports = {
   getProfile, 
   updateProfile, 
   updatePassword, 
-  resetPassword 
+  resetPassword,
+  toggleUserStatus 
 };

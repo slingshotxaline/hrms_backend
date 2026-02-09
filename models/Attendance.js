@@ -11,15 +11,12 @@ const attendanceSchema = mongoose.Schema(
       type: Date,
       required: true,
     },
-    // ✅ First punch IN (office entry)
     inTime: {
       type: Date,
     },
-    // ✅ Last punch OUT (office exit)
     outTime: {
       type: Date,
     },
-    // ✅ All punches throughout the day
     punches: [
       {
         timestamp: {
@@ -52,19 +49,17 @@ const attendanceSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
-    // ✅ Total break time (time between OUT and next IN)
     totalBreakMinutes: {
       type: Number,
       default: 0,
     },
-    // ✅ Net working hours (total time - breaks)
     netWorkingMinutes: {
       type: Number,
       default: 0,
     },
     timingStatus: {
       type: String,
-      enum: ['Early', 'On Time', 'On Time (Grace)', 'Late', 'Half Day'],
+      enum: ['Early', 'On Time', 'On Time (Grace)', 'Late', 'Half Day', 'Off-Day Overtime'],
       default: 'On Time',
     },
     isEarly: {
@@ -95,6 +90,15 @@ const attendanceSchema = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // ✅ New: Off-day tracking
+    isOffDay: {
+      type: Boolean,
+      default: false,
+    },
+    isOffDayWork: {
+      type: Boolean,
+      default: false,
+    },
     isEdited: {
       type: Boolean,
       default: false,
@@ -117,7 +121,6 @@ const attendanceSchema = mongoose.Schema(
   }
 );
 
-// Compound index to ensure one attendance record per employee per day
 attendanceSchema.index({ employee: 1, date: 1 }, { unique: true });
 
 const Attendance = mongoose.model('Attendance', attendanceSchema);

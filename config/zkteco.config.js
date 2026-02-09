@@ -1,7 +1,7 @@
 module.exports = {
   devices: [
     {
-      ip: '192.168.1.201', // ✅ Replace with your device IP
+      ip: '192.168.68.180', // ✅ Replace with your device IP
       port: 4370,
       name: 'Main Office Entrance',
       timeout: 5000,

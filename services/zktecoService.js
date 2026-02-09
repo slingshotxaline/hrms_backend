@@ -261,169 +261,126 @@ async processAttendanceLogs(logs, deviceId = null) {
     }
   }
 
-  /**
-   * Calculate attendance metrics (timing, breaks, overtime)
-   */
-  async calculateAttendanceMetrics(attendance, employee) {
-    if (attendance.punches.length === 0) return;
+ /**
+ * Calculate attendance metrics (timing, breaks, overtime)
+ */
+async calculateAttendanceMetrics(attendance, employee) {
+  // ✅ Import shared helper functions from attendance controller
+  const { 
+    calculateWorkingTime, 
+    getMinutesDifference, 
+    isWeekend, 
+    isHoliday 
+  } = require('../controllers/attendanceController');
 
-    // Helper functions
-    const parseShiftTime = (timeString) => {
-      const [hours, minutes] = timeString.split(":").map(Number);
-      const date = new Date();
-      date.setHours(hours, minutes, 0, 0);
-      return date;
-    };
+  if (attendance.punches.length === 0) return;
 
-    const getMinutesDifference = (time1, time2) => {
-      return Math.floor((time1 - time2) / (1000 * 60));
-    };
+  // ✅ Check if off-day
+  const isOffDay = isWeekend(attendance.date) || await isHoliday(attendance.date);
 
-    const calculateWorkingTime = (punches) => {
-      if (punches.length < 2) {
-        return { totalBreakMinutes: 0, netWorkingMinutes: 0 };
-      }
-
-      let totalBreakMinutes = 0;
-      let lastOutTime = null;
-
-      const sortedPunches = [...punches].sort(
-        (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
-      );
-
-      for (let i = 0; i < sortedPunches.length; i++) {
-        const punch = sortedPunches[i];
-
-        if (punch.type === "OUT") {
-          lastOutTime = new Date(punch.timestamp);
-        } else if (punch.type === "IN" && lastOutTime) {
-          const breakMinutes = getMinutesDifference(
-            new Date(punch.timestamp),
-            lastOutTime,
-          );
-          if (breakMinutes > 0) {
-            totalBreakMinutes += breakMinutes;
-          }
-          lastOutTime = null;
-        }
-      }
-
-      const firstIn = sortedPunches.find((p) => p.type === "IN");
-      const lastOut = [...sortedPunches]
-        .reverse()
-        .find((p) => p.type === "OUT");
-
-      let netWorkingMinutes = 0;
-      if (firstIn && lastOut) {
-        const totalMinutes = getMinutesDifference(
-          new Date(lastOut.timestamp),
-          new Date(firstIn.timestamp),
-        );
-        netWorkingMinutes = totalMinutes - totalBreakMinutes;
-      }
-
-      return { totalBreakMinutes, netWorkingMinutes };
-    };
-
-    // ✅ Calculate shift-based timing for first IN punch
-    const firstInPunch = attendance.punches.find((p) => p.type === "IN");
-    if (firstInPunch) {
-      const bangladeshPunchTime = new Date(
-        firstInPunch.timestamp.toLocaleString("en-US", {
-          timeZone: "Asia/Dhaka",
-        }),
-      );
-
-      const shiftDate = new Date(bangladeshPunchTime);
-      const [shiftHour, shiftMin] = (employee.shiftStart || "09:00")
-        .split(":")
-        .map(Number);
-      shiftDate.setHours(shiftHour, shiftMin, 0, 0);
-      const shiftStartTime = shiftDate;
-
-      const gracePeriodEnd = new Date(shiftStartTime.getTime() + 30 * 60000);
-
-      const [halfDayHour] = "12:00".split(":").map(Number);
-      const halfDayDate = new Date(bangladeshPunchTime);
-      halfDayDate.setHours(halfDayHour, 0, 0, 0);
-      const halfDayTime = halfDayDate;
-
-      const inTime = new Date(firstInPunch.timestamp);
-      const minutesBeforeShift = getMinutesDifference(shiftStartTime, inTime);
-      const minutesAfterShift = getMinutesDifference(inTime, shiftStartTime);
-
-      // Same logic as your existing system
-      if (inTime < shiftStartTime) {
-        attendance.status = "Present";
-        attendance.lateMinutes = 0;
-        attendance.isEarly = true;
-        attendance.earlyMinutes = minutesBeforeShift;
-        attendance.timingStatus = "Early";
-      } else if (inTime <= gracePeriodEnd) {
-        attendance.status = "Present";
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.usedGracePeriod = minutesAfterShift > 0;
-        attendance.timingStatus =
-          minutesAfterShift === 0 ? "On Time" : "On Time (Grace)";
-      } else if (inTime > gracePeriodEnd && inTime < halfDayTime) {
-        attendance.status = "Present";
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.timingStatus = "Late";
-      } else if (inTime >= halfDayTime) {
-        attendance.status = "Present";
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.isHalfDay = true;
-        attendance.timingStatus = "Half Day";
-      }
+  if (isOffDay) {
+    attendance.status = 'Present';
+    attendance.timingStatus = 'Off-Day Overtime';
+    attendance.isOffDay = true;
+    attendance.isOffDayWork = true;
+    
+    // Calculate total working time on off-day as overtime
+    if (attendance.inTime && attendance.outTime) {
+      const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(attendance.punches);
+      attendance.totalBreakMinutes = totalBreakMinutes;
+      attendance.netWorkingMinutes = netWorkingMinutes;
+      
+      // All working time on off-day is overtime
+      attendance.overtimeMinutes = netWorkingMinutes;
+      attendance.hasOvertime = true;
+      attendance.earlyLeave = false;
+      attendance.earlyLeaveMinutes = 0;
+      attendance.lateMinutes = 0;
+      
+      console.log(`✅ Off-day overtime: ${netWorkingMinutes} minutes`);
     }
-
-    // ✅ Calculate OUT time status (only based on last OUT punch)
-    const lastOutPunch = [...attendance.punches]
-      .reverse()
-      .find((p) => p.type === "OUT");
-    if (lastOutPunch) {
-      const bangladeshPunchTime = new Date(
-        lastOutPunch.timestamp.toLocaleString("en-US", {
-          timeZone: "Asia/Dhaka",
-        }),
-      );
-
-      const shiftEndDate = new Date(bangladeshPunchTime);
-      const [endHour, endMin] = (employee.shiftEnd || "18:00")
-        .split(":")
-        .map(Number);
-      shiftEndDate.setHours(endHour, endMin, 0, 0);
-      const shiftEndTime = shiftEndDate;
-
-      const outTime = new Date(lastOutPunch.timestamp);
-
-      if (outTime > shiftEndTime) {
-        const overtimeMinutes = getMinutesDifference(outTime, shiftEndTime);
-        attendance.overtimeMinutes = overtimeMinutes;
-        attendance.hasOvertime = true;
-        attendance.earlyLeave = false;
-        attendance.earlyLeaveMinutes = 0;
-      } else if (outTime < shiftEndTime) {
-        const earlyLeaveMinutes = getMinutesDifference(shiftEndTime, outTime);
-        attendance.earlyLeaveMinutes = earlyLeaveMinutes;
-        attendance.earlyLeave = true;
-        attendance.overtimeMinutes = 0;
-        attendance.hasOvertime = false;
-      } else {
-        attendance.overtimeMinutes = 0;
-        attendance.earlyLeaveMinutes = 0;
-        attendance.hasOvertime = false;
-        attendance.earlyLeave = false;
-      }
-    }
-
-    // ✅ Calculate break time and net working hours
-    const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(
-      attendance.punches,
-    );
-    attendance.totalBreakMinutes = totalBreakMinutes;
-    attendance.netWorkingMinutes = netWorkingMinutes;
+    return;
   }
+
+  // Regular day logic continues below...
+  const firstInPunch = attendance.punches.find(p => p.type === 'IN');
+  if (firstInPunch) {
+    const bangladeshPunchTime = new Date(firstInPunch.timestamp.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
+    
+    const shiftDate = new Date(bangladeshPunchTime);
+    const [shiftHour, shiftMin] = (employee.shiftStart || '09:00').split(':').map(Number);
+    shiftDate.setHours(shiftHour, shiftMin, 0, 0);
+    const shiftStartTime = shiftDate;
+    
+    const gracePeriodEnd = new Date(shiftStartTime.getTime() + 30 * 60000);
+    
+    const [halfDayHour] = '12:00'.split(':').map(Number);
+    const halfDayDate = new Date(bangladeshPunchTime);
+    halfDayDate.setHours(halfDayHour, 0, 0, 0);
+    const halfDayTime = halfDayDate;
+    
+    const inTime = new Date(firstInPunch.timestamp);
+    const minutesBeforeShift = getMinutesDifference(shiftStartTime, inTime);
+    const minutesAfterShift = getMinutesDifference(inTime, shiftStartTime);
+    
+    if (inTime < shiftStartTime) {
+      attendance.status = 'Present';
+      attendance.lateMinutes = 0;
+      attendance.isEarly = true;
+      attendance.earlyMinutes = minutesBeforeShift;
+      attendance.timingStatus = 'Early';
+    } else if (inTime <= gracePeriodEnd) {
+      attendance.status = 'Present';
+      attendance.lateMinutes = minutesAfterShift;
+      attendance.usedGracePeriod = minutesAfterShift > 0;
+      attendance.timingStatus = minutesAfterShift === 0 ? 'On Time' : 'On Time (Grace)';
+    } else if (inTime > gracePeriodEnd && inTime < halfDayTime) {
+      attendance.status = 'Present';
+      attendance.lateMinutes = minutesAfterShift;
+      attendance.timingStatus = 'Late';
+    } else if (inTime >= halfDayTime) {
+      attendance.status = 'Present';
+      attendance.lateMinutes = minutesAfterShift;
+      attendance.isHalfDay = true;
+      attendance.timingStatus = 'Half Day';
+    }
+  }
+
+  const lastOutPunch = [...attendance.punches].reverse().find(p => p.type === 'OUT');
+  if (lastOutPunch) {
+    const bangladeshPunchTime = new Date(lastOutPunch.timestamp.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
+    
+    const shiftEndDate = new Date(bangladeshPunchTime);
+    const [endHour, endMin] = (employee.shiftEnd || '18:00').split(':').map(Number);
+    shiftEndDate.setHours(endHour, endMin, 0, 0);
+    const shiftEndTime = shiftEndDate;
+    
+    const outTime = new Date(lastOutPunch.timestamp);
+    
+    if (outTime > shiftEndTime) {
+      const overtimeMinutes = getMinutesDifference(outTime, shiftEndTime);
+      attendance.overtimeMinutes = overtimeMinutes;
+      attendance.hasOvertime = true;
+      attendance.earlyLeave = false;
+      attendance.earlyLeaveMinutes = 0;
+    } else if (outTime < shiftEndTime) {
+      const earlyLeaveMinutes = getMinutesDifference(shiftEndTime, outTime);
+      attendance.earlyLeaveMinutes = earlyLeaveMinutes;
+      attendance.earlyLeave = true;
+      attendance.overtimeMinutes = 0;
+      attendance.hasOvertime = false;
+    } else {
+      attendance.overtimeMinutes = 0;
+      attendance.earlyLeaveMinutes = 0;
+      attendance.hasOvertime = false;
+      attendance.earlyLeave = false;
+    }
+  }
+
+  const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(attendance.punches);
+  attendance.totalBreakMinutes = totalBreakMinutes;
+  attendance.netWorkingMinutes = netWorkingMinutes;
+}
 
   /**
    * Get users from device

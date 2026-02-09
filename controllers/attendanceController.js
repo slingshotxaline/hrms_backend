@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
 const Employee = require('../models/Employee');
+const Holiday = require('../models/Holiday');
 
 // Helper function to parse time string (HH:mm) and create today's date with that time
 const parseShiftTime = (timeString) => {
@@ -16,9 +17,7 @@ const getMinutesDifference = (time1, time2) => {
 
 // ✅ Helper function to convert UTC to Bangladesh Time and normalize to midnight
 const getBangladeshDate = (date) => {
-  // Convert to Bangladesh timezone (UTC+6)
   const bangladeshTime = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
-  // Normalize to midnight
   bangladeshTime.setHours(0, 0, 0, 0);
   return bangladeshTime;
 };
@@ -26,6 +25,24 @@ const getBangladeshDate = (date) => {
 // ✅ Helper function to get current time in Bangladesh
 const getBangladeshTime = () => {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
+};
+
+// ✅ Helper function to check if date is weekend
+const isWeekend = (date) => {
+  const day = new Date(date).getDay();
+  return day === 5 || day === 6; // Friday = 5, Saturday = 6
+};
+
+// ✅ Helper function to check if date is holiday
+const isHoliday = async (date) => {
+  const normalizedDate = new Date(date);
+  normalizedDate.setHours(0, 0, 0, 0);
+  
+  const holiday = await Holiday.findOne({
+    date: normalizedDate
+  });
+  
+  return !!holiday;
 };
 
 // Helper function to calculate break time and net working hours
@@ -37,7 +54,6 @@ const calculateWorkingTime = (punches) => {
   let totalBreakMinutes = 0;
   let lastOutTime = null;
 
-  // Sort punches by timestamp
   const sortedPunches = [...punches].sort((a, b) => 
     new Date(a.timestamp) - new Date(b.timestamp)
   );
@@ -48,7 +64,6 @@ const calculateWorkingTime = (punches) => {
     if (punch.type === 'OUT') {
       lastOutTime = new Date(punch.timestamp);
     } else if (punch.type === 'IN' && lastOutTime) {
-      // Calculate break time between OUT and next IN
       const breakMinutes = getMinutesDifference(new Date(punch.timestamp), lastOutTime);
       if (breakMinutes > 0) {
         totalBreakMinutes += breakMinutes;
@@ -57,7 +72,6 @@ const calculateWorkingTime = (punches) => {
     }
   }
 
-  // Calculate total time (first IN to last OUT)
   const firstIn = sortedPunches.find(p => p.type === 'IN');
   const lastOut = [...sortedPunches].reverse().find(p => p.type === 'OUT');
 
@@ -73,7 +87,7 @@ const calculateWorkingTime = (punches) => {
   return { totalBreakMinutes, netWorkingMinutes };
 };
 
-// @desc    Mark attendance (handles multiple punches)
+// @desc    Mark attendance (handles multiple punches + ZKTeco integration)
 // @route   POST /api/attendance/mark
 // @access  Public (or secured with API Key for device)
 const markAttendance = async (req, res) => {
@@ -82,20 +96,31 @@ const markAttendance = async (req, res) => {
   try {
     console.log(`📍 Marking attendance: ${employeeCode} - ${type} at ${timestamp}`);
 
-    const employee = await Employee.findOne({ employeeCode });
+    // Find employee by employeeCode OR biometricId (for ZKTeco)
+    const employee = await Employee.findOne({
+      $or: [
+        { employeeCode },
+        { biometricId: employeeCode }
+      ]
+    });
+
     if (!employee) {
       return res.status(404).json({ message: 'Employee not found' });
     }
 
-    // ✅ Convert punch time to Bangladesh timezone
     const punchTime = timestamp ? new Date(timestamp) : getBangladeshTime();
     const bangladeshPunchTime = new Date(punchTime.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }));
-    
-    // ✅ Get date in Bangladesh timezone (normalized to midnight)
     const attendanceDate = getBangladeshDate(bangladeshPunchTime);
     
     console.log(`🕐 Punch time (Bangladesh): ${bangladeshPunchTime.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' })}`);
     console.log(`📅 Attendance date (Bangladesh): ${attendanceDate.toLocaleDateString('en-US', { timeZone: 'Asia/Dhaka' })}`);
+
+    // ✅ Check if this is an off-day (weekend or holiday)
+    const isOffDay = isWeekend(attendanceDate) || await isHoliday(attendanceDate);
+    
+    if (isOffDay) {
+      console.log(`🎉 OFF-DAY DETECTED! This will be counted as overtime.`);
+    }
 
     let attendance = await Attendance.findOne({
       employee: employee._id,
@@ -107,6 +132,7 @@ const markAttendance = async (req, res) => {
         employee: employee._id,
         date: attendanceDate,
         punches: [],
+        isOffDay, // ✅ Mark if this is an off-day
       });
     }
 
@@ -135,87 +161,116 @@ const markAttendance = async (req, res) => {
       attendance.outTime = lastOutPunch.timestamp;
     }
 
-    // Calculate IN time status (only based on first punch)
-    if (firstInPunch && type === 'IN' && attendance.punches.filter(p => p.type === 'IN').length === 1) {
-      // ✅ Create shift time for TODAY in Bangladesh timezone
-      const shiftDate = new Date(bangladeshPunchTime);
-      const [shiftHour, shiftMin] = (employee.shiftStart || '09:00').split(':').map(Number);
-      shiftDate.setHours(shiftHour, shiftMin, 0, 0);
-      const shiftStartTime = shiftDate;
+    // ✅ If it's an off-day, handle differently
+    if (isOffDay) {
+      attendance.status = 'Present';
+      attendance.timingStatus = 'Off-Day Overtime';
+      attendance.isOffDayWork = true;
       
-      const gracePeriodEnd = new Date(shiftStartTime.getTime() + 30 * 60000);
-      
-      const [halfDayHour] = '12:00'.split(':').map(Number);
-      const halfDayDate = new Date(bangladeshPunchTime);
-      halfDayDate.setHours(halfDayHour, 0, 0, 0);
-      const halfDayTime = halfDayDate;
-      
-      const inTime = new Date(firstInPunch.timestamp);
-      const minutesBeforeShift = getMinutesDifference(shiftStartTime, inTime);
-      const minutesAfterShift = getMinutesDifference(inTime, shiftStartTime);
-      
-      console.log(`⏰ Shift start: ${shiftStartTime.toLocaleTimeString()}, In time: ${inTime.toLocaleTimeString()}`);
-      console.log(`⏱️ Minutes before/after shift: ${minutesBeforeShift} / ${minutesAfterShift}`);
-      
-      if (inTime < shiftStartTime) {
-        attendance.status = 'Present';
-        attendance.lateMinutes = 0;
-        attendance.isEarly = true;
-        attendance.earlyMinutes = minutesBeforeShift;
-        attendance.timingStatus = 'Early';
-      } else if (inTime <= gracePeriodEnd) {
-        attendance.status = 'Present';
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.usedGracePeriod = minutesAfterShift > 0;
-        attendance.timingStatus = minutesAfterShift === 0 ? 'On Time' : 'On Time (Grace)';
-      } else if (inTime > gracePeriodEnd && inTime < halfDayTime) {
-        attendance.status = 'Present';
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.timingStatus = 'Late';
-      } else if (inTime >= halfDayTime) {
-        attendance.status = 'Present';
-        attendance.lateMinutes = minutesAfterShift;
-        attendance.isHalfDay = true;
-        attendance.timingStatus = 'Half Day';
-      }
-    }
-
-    // Calculate OUT time status (only based on last OUT punch)
-    if (lastOutPunch) {
-      // ✅ Create shift end time for TODAY in Bangladesh timezone
-      const shiftEndDate = new Date(bangladeshPunchTime);
-      const [endHour, endMin] = (employee.shiftEnd || '18:00').split(':').map(Number);
-      shiftEndDate.setHours(endHour, endMin, 0, 0);
-      const shiftEndTime = shiftEndDate;
-      
-      const outTime = new Date(lastOutPunch.timestamp);
-      
-      console.log(`⏰ Shift end: ${shiftEndTime.toLocaleTimeString()}, Out time: ${outTime.toLocaleTimeString()}`);
-      
-      if (outTime > shiftEndTime) {
-        const overtimeMinutes = getMinutesDifference(outTime, shiftEndTime);
-        attendance.overtimeMinutes = overtimeMinutes;
+      // Calculate total working time on off-day as overtime
+      if (attendance.inTime && attendance.outTime) {
+        const totalMinutes = getMinutesDifference(
+          new Date(attendance.outTime),
+          new Date(attendance.inTime)
+        );
+        
+        // Calculate breaks
+        const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(attendance.punches);
+        attendance.totalBreakMinutes = totalBreakMinutes;
+        attendance.netWorkingMinutes = netWorkingMinutes;
+        
+        // ✅ All working time on off-day is overtime
+        attendance.overtimeMinutes = netWorkingMinutes;
         attendance.hasOvertime = true;
         attendance.earlyLeave = false;
         attendance.earlyLeaveMinutes = 0;
-      } else if (outTime < shiftEndTime) {
-        const earlyLeaveMinutes = getMinutesDifference(shiftEndTime, outTime);
-        attendance.earlyLeaveMinutes = earlyLeaveMinutes;
-        attendance.earlyLeave = true;
-        attendance.overtimeMinutes = 0;
-        attendance.hasOvertime = false;
-      } else {
-        attendance.overtimeMinutes = 0;
-        attendance.earlyLeaveMinutes = 0;
-        attendance.hasOvertime = false;
-        attendance.earlyLeave = false;
+        attendance.lateMinutes = 0;
+        
+        console.log(`✅ Off-day overtime: ${netWorkingMinutes} minutes`);
       }
-    }
+    } else {
+      // Regular day - normal attendance logic
+      
+      // Calculate IN time status (only based on first punch)
+      if (firstInPunch && type === 'IN' && attendance.punches.filter(p => p.type === 'IN').length === 1) {
+        const shiftDate = new Date(bangladeshPunchTime);
+        const [shiftHour, shiftMin] = (employee.shiftStart || '09:00').split(':').map(Number);
+        shiftDate.setHours(shiftHour, shiftMin, 0, 0);
+        const shiftStartTime = shiftDate;
+        
+        const gracePeriodEnd = new Date(shiftStartTime.getTime() + 30 * 60000);
+        
+        const [halfDayHour] = '12:00'.split(':').map(Number);
+        const halfDayDate = new Date(bangladeshPunchTime);
+        halfDayDate.setHours(halfDayHour, 0, 0, 0);
+        const halfDayTime = halfDayDate;
+        
+        const inTime = new Date(firstInPunch.timestamp);
+        const minutesBeforeShift = getMinutesDifference(shiftStartTime, inTime);
+        const minutesAfterShift = getMinutesDifference(inTime, shiftStartTime);
+        
+        console.log(`⏰ Shift start: ${shiftStartTime.toLocaleTimeString()}, In time: ${inTime.toLocaleTimeString()}`);
+        console.log(`⏱️ Minutes before/after shift: ${minutesBeforeShift} / ${minutesAfterShift}`);
+        
+        if (inTime < shiftStartTime) {
+          attendance.status = 'Present';
+          attendance.lateMinutes = 0;
+          attendance.isEarly = true;
+          attendance.earlyMinutes = minutesBeforeShift;
+          attendance.timingStatus = 'Early';
+        } else if (inTime <= gracePeriodEnd) {
+          attendance.status = 'Present';
+          attendance.lateMinutes = minutesAfterShift;
+          attendance.usedGracePeriod = minutesAfterShift > 0;
+          attendance.timingStatus = minutesAfterShift === 0 ? 'On Time' : 'On Time (Grace)';
+        } else if (inTime > gracePeriodEnd && inTime < halfDayTime) {
+          attendance.status = 'Present';
+          attendance.lateMinutes = minutesAfterShift;
+          attendance.timingStatus = 'Late';
+        } else if (inTime >= halfDayTime) {
+          attendance.status = 'Present';
+          attendance.lateMinutes = minutesAfterShift;
+          attendance.isHalfDay = true;
+          attendance.timingStatus = 'Half Day';
+        }
+      }
 
-    // Calculate break time and net working hours
-    const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(attendance.punches);
-    attendance.totalBreakMinutes = totalBreakMinutes;
-    attendance.netWorkingMinutes = netWorkingMinutes;
+      // Calculate OUT time status (only based on last OUT punch)
+      if (lastOutPunch) {
+        const shiftEndDate = new Date(bangladeshPunchTime);
+        const [endHour, endMin] = (employee.shiftEnd || '18:00').split(':').map(Number);
+        shiftEndDate.setHours(endHour, endMin, 0, 0);
+        const shiftEndTime = shiftEndDate;
+        
+        const outTime = new Date(lastOutPunch.timestamp);
+        
+        console.log(`⏰ Shift end: ${shiftEndTime.toLocaleTimeString()}, Out time: ${outTime.toLocaleTimeString()}`);
+        
+        if (outTime > shiftEndTime) {
+          const overtimeMinutes = getMinutesDifference(outTime, shiftEndTime);
+          attendance.overtimeMinutes = overtimeMinutes;
+          attendance.hasOvertime = true;
+          attendance.earlyLeave = false;
+          attendance.earlyLeaveMinutes = 0;
+        } else if (outTime < shiftEndTime) {
+          const earlyLeaveMinutes = getMinutesDifference(shiftEndTime, outTime);
+          attendance.earlyLeaveMinutes = earlyLeaveMinutes;
+          attendance.earlyLeave = true;
+          attendance.overtimeMinutes = 0;
+          attendance.hasOvertime = false;
+        } else {
+          attendance.overtimeMinutes = 0;
+          attendance.earlyLeaveMinutes = 0;
+          attendance.hasOvertime = false;
+          attendance.earlyLeave = false;
+        }
+      }
+
+      // Calculate break time and net working hours
+      const { totalBreakMinutes, netWorkingMinutes } = calculateWorkingTime(attendance.punches);
+      attendance.totalBreakMinutes = totalBreakMinutes;
+      attendance.netWorkingMinutes = netWorkingMinutes;
+    }
 
     // Set status to Present if inTime exists
     if (attendance.inTime && !attendance.status) {
@@ -224,18 +279,20 @@ const markAttendance = async (req, res) => {
 
     await attendance.save();
 
-    console.log(`✅ Attendance saved - Date: ${attendanceDate.toLocaleDateString()}, Total breaks: ${totalBreakMinutes} min, Net working: ${netWorkingMinutes} min`);
+    console.log(`✅ Attendance saved - Date: ${attendanceDate.toLocaleDateString()}, Total breaks: ${attendance.totalBreakMinutes} min, Net working: ${attendance.netWorkingMinutes} min`);
 
     res.status(200).json({ 
       message: 'Attendance marked successfully', 
       attendance,
       punchCount: attendance.punches.length,
-      totalBreakMinutes,
-      netWorkingMinutes,
+      totalBreakMinutes: attendance.totalBreakMinutes,
+      netWorkingMinutes: attendance.netWorkingMinutes,
       timingStatus: attendance.timingStatus,
       lateMinutes: attendance.lateMinutes,
       overtimeMinutes: attendance.overtimeMinutes,
       earlyLeaveMinutes: attendance.earlyLeaveMinutes,
+      isOffDay: attendance.isOffDay,
+      isOffDayWork: attendance.isOffDayWork,
       bangladeshTime: bangladeshPunchTime.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' })
     });
   } catch (error) {
@@ -253,7 +310,6 @@ const getAttendance = async (req, res) => {
     const query = {};
 
     if (startDate && endDate) {
-      // ✅ Parse dates in Bangladesh timezone
       const start = new Date(startDate + 'T00:00:00');
       const end = new Date(endDate + 'T23:59:59');
       
@@ -359,9 +415,18 @@ const manualAttendance = async (req, res) => {
   }
 };
 
+// ✅ Export helper functions for ZKTeco service to use
 module.exports = { 
   markAttendance, 
   getAttendance, 
   getAttendanceById, 
-  manualAttendance 
+  manualAttendance,
+  // Export helpers for ZKTeco integration
+  calculateWorkingTime,
+  getMinutesDifference,
+  parseShiftTime,
+  getBangladeshDate,
+  getBangladeshTime,
+  isWeekend,
+  isHoliday
 };

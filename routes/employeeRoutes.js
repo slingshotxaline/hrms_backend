@@ -1,17 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const {
-  createEmployee,
   getEmployees,
   getEmployeeById,
+  createEmployee,
   updateEmployee,
+  deleteEmployee,
+  toggleEmployeeStatus, // ✅ ADD THIS
 } = require('../controllers/employeeController');
 const { protect, admin, hr } = require('../middleware/authMiddleware');
 
-router.route('/').post(protect, hr, createEmployee).get(protect, hr, getEmployees);
-router
-  .route('/:id')
+router.route('/')
+  .get(protect, getEmployees)
+  .post(protect, admin, createEmployee);
+
+router.route('/:id')
   .get(protect, getEmployeeById)
-  .put(protect, hr, updateEmployee);
+  .put(protect, admin, updateEmployee)
+  .delete(protect, admin, deleteEmployee);
+
+// ✅ ADD THIS ROUTE
+router.put('/:id/toggle-status', protect, admin, toggleEmployeeStatus);
 
 module.exports = router;

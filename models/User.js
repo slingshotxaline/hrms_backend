@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
 const userSchema = mongoose.Schema(
   {
@@ -25,12 +24,10 @@ const userSchema = mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
     },
-    // Reporting structure
     reportsTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
-    // For Team Leads and Business Leads - who reports to them
     manages: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -45,18 +42,25 @@ const userSchema = mongoose.Schema(
   }
 );
 
-userSchema.methods.matchPassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
-};
-
-// ✅ FIXED: Don't use next() parameter, just return
-userSchema.pre('save', async function () {
-  if (!this.isModified('password')) {
-    return; // ✅ Just return, no next()
+// ✅ FIXED: Pre-save hook with proper async/await handling
+userSchema.pre('save', async function() {
+  try {
+    // ✅ Sync isActive with Employee model (only if employee exists and isActive changed)
+    if (this.isModified('isActive') && this.employeeId) {
+      const Employee = mongoose.model('Employee');
+      await Employee.findByIdAndUpdate(
+        this.employeeId,
+        { isActive: this.isActive },
+        { new: true }
+      );
+      console.log(`✅ Synced User.isActive (${this.isActive}) → Employee.isActive for ${this.name}`);
+    }
+  } catch (error) {
+    console.error('❌ Error in User pre-save hook:', error);
+    throw error; // Re-throw to prevent save if sync fails
   }
-
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+  
+  // ✅ No need to call next() - mongoose handles it automatically for async functions
 });
 
 const User = mongoose.model('User', userSchema);
