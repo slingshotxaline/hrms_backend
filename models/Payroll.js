@@ -8,11 +8,7 @@ const payrollSchema = mongoose.Schema(
       required: true,
     },
     month: {
-      type: Number, // 1-12
-      required: true,
-    },
-    year: {
-      type: Number,
+      type: Date,
       required: true,
     },
     basicSalary: {
@@ -23,33 +19,48 @@ const payrollSchema = mongoose.Schema(
       houseRent: { type: Number, default: 0 },
       medical: { type: Number, default: 0 },
       transport: { type: Number, default: 0 },
-      other: { type: Number, default: 0 },
+    },
+    totalAllowances: {
+      type: Number,
+      default: 0,
+    },
+    grossSalary: {
+      type: Number,
+      required: true,
     },
     deductions: {
-      tax: { type: Number, default: 0 },
-      providentFund: { type: Number, default: 0 },
       absent: { type: Number, default: 0 },
-      late: { type: Number, default: 0 },
+      halfDay: { type: Number, default: 0 },
+      late: { type: Number, default: 0 }, // ✅ ADD THIS
+      tax: { type: Number, default: 0 },
       other: { type: Number, default: 0 },
     },
-    totalEarnings: {
-        type: Number,
-        required: true
-    },
     totalDeductions: {
-        type: Number,
-        required: true
+      type: Number,
+      default: 0,
+    },
+    overtime: {
+      hours: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 },
     },
     netSalary: {
       type: Number,
       required: true,
     },
+    attendance: {
+      present: { type: Number, default: 0 },
+      absent: { type: Number, default: 0 },
+      leave: { type: Number, default: 0 },
+      halfDay: { type: Number, default: 0 },
+      late: { type: Number, default: 0 }, // ✅ ADD THIS
+      lateApproved: { type: Number, default: 0 }, // ✅ ADD THIS
+    },
     status: {
       type: String,
-      enum: ['Draft', 'Generated', 'Paid'],
-      default: 'Draft',
+      enum: ['Pending', 'Approved', 'Paid'],
+      default: 'Pending',
     },
-    paymentDate: {
+    paidAt: {
       type: Date,
     },
   },
@@ -57,6 +68,8 @@ const payrollSchema = mongoose.Schema(
     timestamps: true,
   }
 );
+
+payrollSchema.index({ employee: 1, month: 1 }, { unique: true });
 
 const Payroll = mongoose.model('Payroll', payrollSchema);
 

@@ -2,131 +2,197 @@ const Payroll = require('../models/Payroll');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Holiday = require('../models/Holiday');
+const Late = require('../models/Late'); // ✅ ADD THIS
+const LateSettings = require('../models/LateSettings'); // ✅ ADD THIS
 
 // @desc    Generate Payroll for a specific month/year
 // @route   POST /api/payroll/generate
 // @access  Private/Admin/HR
 const generatePayroll = async (req, res) => {
-  const { month, year, employeeIds } = req.body;
-
   try {
-    let employees;
-    if (employeeIds && employeeIds.length > 0) {
-      employees = await Employee.find({ _id: { $in: employeeIds } });
-    } else {
-      employees = await Employee.find({ isActive: true });
-    }
+    const { month, year } = req.body;
 
-    // Get holidays for the month
+    console.log(`💰 Generating payroll for ${month}/${year}`);
+
+    // Date range for the month
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
-    
-    const holidays = await Holiday.find({
-      date: { $gte: startDate, $lte: endDate },
-      isPaid: true // Only count paid holidays
-    });
-
-    // Get all dates in the month
     const daysInMonth = endDate.getDate();
-    const workingDaysInMonth = getWorkingDays(year, month, holidays);
 
-    const payrolls = [];
+    console.log(`📅 Processing ${daysInMonth} days from ${startDate.toDateString()} to ${endDate.toDateString()}`);
+
+    // Get all active employees
+    const employees = await Employee.find({ isActive: true });
+    console.log(`👥 Found ${employees.length} active employees`);
+
+    // ✅ Get late settings
+    const lateSettings = await LateSettings.findOne({ organization: 'default' });
+    const graceDaysPerMonth = lateSettings?.graceDaysPerMonth || 2;
+    const deductionPreference = lateSettings?.deductionPreference || 'Leave';
+
+    const payrollRecords = [];
 
     for (const employee of employees) {
+      console.log(`\n📊 Processing payroll for ${employee.firstName} ${employee.lastName} (${employee.employeeCode})`);
+
       // Get attendance records for the month
       const attendanceRecords = await Attendance.find({
         employee: employee._id,
-        date: { $gte: startDate, $lte: endDate }
+        date: { $gte: startDate, $lte: endDate },
       });
 
-      // Calculate attendance metrics
+      // Count attendance
       const presentDays = attendanceRecords.filter(a => a.status === 'Present').length;
       const absentDays = attendanceRecords.filter(a => a.status === 'Absent').length;
       const leaveDays = attendanceRecords.filter(a => a.status === 'Leave').length;
-      
-      // Calculate late deductions
-      const totalLateMinutes = attendanceRecords.reduce((sum, a) => sum + (a.lateMinutes || 0), 0);
-      const lateDeduction = calculateLateDeduction(totalLateMinutes, employee.basicSalary, workingDaysInMonth);
+      const halfDays = attendanceRecords.filter(a => a.isHalfDay).length;
 
-      // Calculate absent deductions (excluding holidays and weekends)
-      const absentDeduction = calculateAbsentDeduction(absentDays, employee.basicSalary, workingDaysInMonth);
+      // Calculate total working days (excluding weekends and holidays)
+      const totalWorkingDays = daysInMonth; // Simplified - you can improve this
 
-      // Basic salary components
-      const basic = employee.basicSalary;
-      const houseRent = employee.allowances?.houseRent || 0;
-      const medical = employee.allowances?.medical || 0;
-      const transport = employee.allowances?.transport || 0;
-      
-      const totalEarnings = basic + houseRent + medical + transport;
-      
-      // Deductions
-      const tax = calculateTax(totalEarnings); // Simple tax calculation
-      const pf = calculateProvidentFund(basic); // PF calculation
-      
-      const totalDeductions = absentDeduction + lateDeduction + tax + pf;
-      
-      const netSalary = totalEarnings - totalDeductions;
+      console.log(`   Present: ${presentDays}, Absent: ${absentDays}, Leave: ${leaveDays}, Half Days: ${halfDays}`);
 
-      // Check if payroll already exists
-      const existingPayroll = await Payroll.findOne({
+      // Calculate overtime
+      const totalOvertimeMinutes = attendanceRecords.reduce((sum, a) => sum + (a.overtimeMinutes || 0), 0);
+      const overtimeHours = totalOvertimeMinutes / 60;
+      const overtimeAmount = (employee.basicSalary / 30 / 8) * overtimeHours * 1.5; // 1.5x rate
+
+      // ✅ Calculate late deductions
+      const lates = await Late.find({
         employee: employee._id,
-        month,
-        year
-      });
+        date: { $gte: startDate, $lte: endDate },
+        status: { $ne: 'Rejected' } // Don't count rejected lates
+      }).sort({ date: 1 });
 
-      if (existingPayroll) {
-        // Update existing payroll
-        existingPayroll.basicSalary = basic;
-        existingPayroll.allowances = { houseRent, medical, transport };
-        existingPayroll.deductions = {
-          absent: absentDeduction,
-          late: lateDeduction,
-          tax,
-          providentFund: pf
-        };
-        existingPayroll.totalEarnings = totalEarnings;
-        existingPayroll.totalDeductions = totalDeductions;
-        existingPayroll.netSalary = netSalary;
-        existingPayroll.status = 'Generated';
+      // Separate approved and unapproved lates
+      const approvedLates = lates.filter(l => l.status === 'Approved');
+      const unapprovedLates = lates.filter(l => l.status === 'Pending');
+
+      // Only unapproved lates count for deduction (approved ones are forgiven)
+      const deductibleLates = unapprovedLates.filter((_, index) => index >= graceDaysPerMonth);
+
+      let lateSalaryDeduction = 0;
+      let lateLeaveDeduction = 0;
+      let availableEarnedLeave = employee.leaveBalance.earned || 0;
+      const perDaySalary = employee.basicSalary / 30;
+
+      console.log(`   🕐 Total lates: ${lates.length}, Approved: ${approvedLates.length}, Deductible: ${deductibleLates.length}`);
+
+      // Process each deductible late
+      for (let i = 0; i < deductibleLates.length; i++) {
+        const late = deductibleLates[i];
         
-        await existingPayroll.save();
-        payrolls.push(existingPayroll);
-        continue;
+        if (deductionPreference === 'Salary') {
+          // Always deduct salary
+          lateSalaryDeduction += perDaySalary;
+          
+          // Mark late as deducted
+          late.isDeducted = true;
+          late.deductionType = 'Salary';
+          late.deductionAmount = perDaySalary;
+          await late.save();
+        } else if (deductionPreference === 'Leave') {
+          // Deduct leave if available, otherwise salary
+          if (availableEarnedLeave > 0) {
+            lateLeaveDeduction += 1;
+            availableEarnedLeave -= 1;
+            
+            // Mark late as deducted
+            late.isDeducted = true;
+            late.deductionType = 'Leave';
+            late.deductionAmount = 1;
+            await late.save();
+          } else {
+            lateSalaryDeduction += perDaySalary;
+            
+            // Mark late as deducted
+            late.isDeducted = true;
+            late.deductionType = 'Salary';
+            late.deductionAmount = perDaySalary;
+            await late.save();
+          }
+        }
       }
 
-      const payroll = await Payroll.create({
-        employee: employee._id,
-        month,
-        year,
-        basicSalary: basic,
-        allowances: {
-          houseRent,
-          medical,
-          transport
-        },
-        deductions: {
-          absent: absentDeduction,
-          late: lateDeduction,
-          tax,
-          providentFund: pf
-        },
-        totalEarnings,
-        totalDeductions,
-        netSalary,
-        status: 'Generated'
-      });
+      // Update employee leave balance if leaves were deducted for lates
+      if (lateLeaveDeduction > 0) {
+        employee.leaveBalance.earned -= lateLeaveDeduction;
+        await employee.save();
+        console.log(`   ✅ Deducted ${lateLeaveDeduction} earned leave(s) for late arrivals`);
+      }
 
-      payrolls.push(payroll);
+      console.log(`   💸 Late deductions: Salary: ৳${Math.round(lateSalaryDeduction)}, Leave: ${lateLeaveDeduction} days`);
+
+      // Calculate deductions
+      const absentDeduction = (employee.basicSalary / totalWorkingDays) * absentDays;
+      const halfDayDeduction = (employee.basicSalary / totalWorkingDays) * halfDays * 0.5;
+
+      // Calculate total allowances
+      const totalAllowances = 
+        (employee.allowances?.houseRent || 0) + 
+        (employee.allowances?.medical || 0) + 
+        (employee.allowances?.transport || 0);
+
+      // Calculate gross salary
+      const grossSalary = employee.basicSalary + totalAllowances;
+
+      // Calculate total deductions
+      const totalDeductions = absentDeduction + halfDayDeduction + lateSalaryDeduction;
+
+      // Calculate net salary
+      const netSalary = grossSalary + overtimeAmount - totalDeductions;
+
+      console.log(`   💰 Gross: ৳${grossSalary}, Deductions: ৳${Math.round(totalDeductions)}, Net: ৳${Math.round(netSalary)}`);
+
+      // Create payroll record
+      const payroll = {
+        employee: employee._id,
+        month: new Date(year, month - 1, 1),
+        basicSalary: employee.basicSalary,
+        allowances: {
+          houseRent: employee.allowances?.houseRent || 0,
+          medical: employee.allowances?.medical || 0,
+          transport: employee.allowances?.transport || 0,
+        },
+        totalAllowances,
+        grossSalary,
+        deductions: {
+          absent: Math.round(absentDeduction),
+          halfDay: Math.round(halfDayDeduction),
+          late: Math.round(lateSalaryDeduction), // ✅ ADD THIS
+        },
+        totalDeductions: Math.round(totalDeductions),
+        overtime: {
+          hours: Math.round(overtimeHours * 10) / 10,
+          amount: Math.round(overtimeAmount),
+        },
+        netSalary: Math.round(netSalary),
+        attendance: {
+          present: presentDays,
+          absent: absentDays,
+          leave: leaveDays,
+          halfDay: halfDays,
+          late: deductibleLates.length, // ✅ ADD THIS
+          lateApproved: approvedLates.length, // ✅ ADD THIS
+        },
+        status: 'Pending',
+      };
+
+      payrollRecords.push(payroll);
     }
 
-    res.status(201).json({ 
-      message: 'Payroll generated successfully', 
-      count: payrolls.length, 
-      payrolls,
-      workingDays: workingDaysInMonth,
-      holidays: holidays.length
+    // Save all payroll records
+    const savedPayrolls = await Payroll.insertMany(payrollRecords);
+
+    console.log(`\n✅ Generated ${savedPayrolls.length} payroll records`);
+
+    res.status(201).json({
+      message: 'Payroll generated successfully',
+      count: savedPayrolls.length,
+      payrolls: savedPayrolls,
     });
   } catch (error) {
+    console.error('❌ Error generating payroll:', error);
     res.status(500).json({ message: error.message });
   }
 };
