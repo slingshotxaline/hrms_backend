@@ -87,23 +87,33 @@ const employeeSchema = mongoose.Schema(
         type: String,
       },
     },
+    // ✅ UPDATED: New leave balance structure
     leaveBalance: {
-      casual: {
-        type: Number,
-        default: 12,
-      },
       sick: {
         type: Number,
-        default: 12,
+        default: 10, // ✅ Changed from 12 to 10
       },
-      earned: {
+      annual: {
         type: Number,
-        default: 15,
+        default: 10, // ✅ Changed from 'earned' to 'annual'
+      },
+      casual: {
+        type: Number,
+        default: 10, // ✅ Changed from 12 to 10
       },
       unpaid: {
         type: Number,
         default: 0,
       },
+    },
+    // ✅ NEW: Track monthly leave usage for restrictions
+    monthlyLeaveUsage: {
+      type: Map,
+      of: {
+        annual: { type: Number, default: 0 },
+        casual: { type: Number, default: 0 },
+      },
+      default: {},
     },
     isActive: {
       type: Boolean,
@@ -119,7 +129,7 @@ const employeeSchema = mongoose.Schema(
   }
 );
 
-// ✅ FIXED: Pre-save hook with proper async/await handling
+// ✅ Pre-save hook with proper async/await handling
 employeeSchema.pre('save', async function() {
   try {
     // Calculate gross salary
@@ -132,7 +142,7 @@ employeeSchema.pre('save', async function() {
       this.grossSalary = (this.basicSalary || 0) + totalAllowances;
     }
 
-    // ✅ Sync isActive status with User model (only if user exists and isActive changed)
+    // ✅ Sync isActive status with User model
     if (this.isModified('isActive') && this.user) {
       const User = mongoose.model('User');
       await User.findByIdAndUpdate(
@@ -144,10 +154,8 @@ employeeSchema.pre('save', async function() {
     }
   } catch (error) {
     console.error('❌ Error in Employee pre-save hook:', error);
-    throw error; // Re-throw to prevent save if sync fails
+    throw error;
   }
-  
-  // ✅ No need to call next() - mongoose handles it automatically for async functions
 });
 
 const Employee = mongoose.model('Employee', employeeSchema);

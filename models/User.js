@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 const userSchema = mongoose.Schema(
   {
@@ -14,6 +15,7 @@ const userSchema = mongoose.Schema(
     password: {
       type: String,
       required: true,
+      select: true, // Make sure password is available when needed
     },
     role: {
       type: String,
@@ -42,10 +44,34 @@ const userSchema = mongoose.Schema(
   }
 );
 
-// ✅ FIXED: Pre-save hook with proper async/await handling
-userSchema.pre('save', async function() {
+// ✅ Method to compare password (MUST BE ADDED BEFORE pre-save hooks)
+userSchema.methods.matchPassword = async function(enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// ✅ Pre-save hook to hash password
+userSchema.pre('save', async function(next) {
+  // Only hash the password if it has been modified (or is new)
+  if (!this.isModified('password')) {
+    return next();
+  }
+
   try {
-    // ✅ Sync isActive with Employee model (only if employee exists and isActive changed)
+    // Generate salt and hash password
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    console.log(`🔒 Password hashed for user: ${this.name}`);
+    next();
+  } catch (error) {
+    console.error('❌ Error hashing password:', error);
+    next(error);
+  }
+});
+
+// ✅ Pre-save hook to sync isActive with Employee model
+userSchema.pre('save', async function(next) {
+  try {
+    // Only sync if isActive changed AND employee exists
     if (this.isModified('isActive') && this.employeeId) {
       const Employee = mongoose.model('Employee');
       await Employee.findByIdAndUpdate(
@@ -55,12 +81,11 @@ userSchema.pre('save', async function() {
       );
       console.log(`✅ Synced User.isActive (${this.isActive}) → Employee.isActive for ${this.name}`);
     }
+    next();
   } catch (error) {
     console.error('❌ Error in User pre-save hook:', error);
-    throw error; // Re-throw to prevent save if sync fails
+    next(error);
   }
-  
-  // ✅ No need to call next() - mongoose handles it automatically for async functions
 });
 
 const User = mongoose.model('User', userSchema);

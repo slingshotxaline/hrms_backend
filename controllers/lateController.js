@@ -58,7 +58,6 @@ const applyLate = async (req, res) => {
       return res.status(400).json({ message: 'Employee record not found' });
     }
 
-    // ✅ FIX: Get employee ID properly
     const employeeId = user.employeeId._id || user.employeeId;
     const employee = await Employee.findById(employeeId);
 
@@ -78,7 +77,6 @@ const applyLate = async (req, res) => {
     console.log(`📋 Attendance employee ID: ${attendance.employee._id}`);
     console.log(`👤 Current employee ID: ${employee._id}`);
 
-    // ✅ FIX: Compare string IDs properly
     const attendanceEmployeeId = attendance.employee._id.toString();
     const currentEmployeeId = employee._id.toString();
 
@@ -86,10 +84,6 @@ const applyLate = async (req, res) => {
       console.log(`❌ Authorization failed: ${attendanceEmployeeId} !== ${currentEmployeeId}`);
       return res.status(403).json({ 
         message: 'Not authorized to apply for this attendance',
-        debug: {
-          attendanceEmployee: attendanceEmployeeId,
-          currentEmployee: currentEmployeeId
-        }
       });
     }
 
@@ -142,6 +136,7 @@ const applyLate = async (req, res) => {
 // @desc    Get all late applications (with filtering)
 // @route   GET /api/lates
 // @access  Private
+
 const getLates = async (req, res) => {
   try {
     const { status, employeeId, startDate, endDate } = req.query;
@@ -313,11 +308,11 @@ const getLateSettings = async (req, res) => {
     let settings = await LateSettings.findOne({ organization: 'default' });
     
     if (!settings) {
-      // Create default settings
+      // ✅ Create default settings
       settings = await LateSettings.create({
         organization: 'default',
-        deductionPreference: 'Leave',
-        graceDaysPerMonth: 2,
+        deductionPreference: 'Leave', // ✅ Will deduct from Annual Leave
+        graceDaysPerMonth: 2, // ✅ First 2 lates are free
         lateThresholdMinutes: 1,
         autoApproveUnder: 0,
         isEnabled: true,
@@ -392,7 +387,7 @@ const calculateLateDeductions = async (req, res) => {
     const graceDays = settings?.graceDaysPerMonth || 2;
     const deductionPref = settings?.deductionPreference || 'Leave';
 
-    // Get all lates for this month (excluding rejected and approved ones)
+    // Get all lates for this month (excluding rejected)
     const lates = await Late.find({
       employee: employeeId,
       date: { $gte: startOfMonth, $lte: endOfMonth },
@@ -401,10 +396,10 @@ const calculateLateDeductions = async (req, res) => {
 
     // Separate approved and unapproved lates
     const approvedLates = lates.filter(l => l.status === 'Approved');
-    const unapprovedLates = lates.filter(l => l.status === 'Pending');
+    const pendingLates = lates.filter(l => l.status === 'Pending');
 
-    // Only unapproved lates count for deduction
-    const deductibleLates = unapprovedLates.filter((_, index) => index >= graceDays);
+    // ✅ Only PENDING lates beyond grace period are deductible
+    const deductibleLates = pendingLates.filter((_, index) => index >= graceDays);
 
     let totalSalaryDeduction = 0;
     let totalLeaveDeduction = 0;
@@ -413,8 +408,8 @@ const calculateLateDeductions = async (req, res) => {
     // Calculate per-day salary
     const perDaySalary = employee.basicSalary / 30;
 
-    // Available earned leave
-    let availableEarnedLeave = employee.leaveBalance.earned || 0;
+    // ✅ Available ANNUAL leave (changed from earned)
+    let availableAnnualLeave = employee.leaveBalance.annual || 0;
 
     deductibleLates.forEach((late, index) => {
       const lateNumber = index + graceDays + 1; // 3rd, 4th, 5th, etc.
@@ -428,12 +423,12 @@ const calculateLateDeductions = async (req, res) => {
         deductionAmount = perDaySalary;
         totalSalaryDeduction += perDaySalary;
       } else if (deductionPref === 'Leave') {
-        // Deduct leave if available, otherwise salary
-        if (availableEarnedLeave > 0) {
+        // ✅ Deduct ANNUAL leave if available, otherwise salary
+        if (availableAnnualLeave > 0) {
           deductionType = 'Leave';
           deductionAmount = 1;
           totalLeaveDeduction += 1;
-          availableEarnedLeave -= 1;
+          availableAnnualLeave -= 1;
         } else {
           deductionType = 'Salary';
           deductionAmount = perDaySalary;
@@ -459,7 +454,7 @@ const calculateLateDeductions = async (req, res) => {
         employeeCode: employee.employeeCode,
         basicSalary: employee.basicSalary,
         perDaySalary,
-        earnedLeaveBalance: employee.leaveBalance.earned,
+        annualLeaveBalance: employee.leaveBalance.annual, // ✅ Changed from earned
       },
       month,
       settings: {
@@ -469,7 +464,7 @@ const calculateLateDeductions = async (req, res) => {
       summary: {
         totalLates: lates.length,
         approvedLates: approvedLates.length,
-        unapprovedLates: unapprovedLates.length,
+        pendingLates: pendingLates.length,
         deductibleLates: deductibleLates.length,
         totalSalaryDeduction: Math.round(totalSalaryDeduction),
         totalLeaveDeduction,

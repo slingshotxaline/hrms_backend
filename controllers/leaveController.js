@@ -35,14 +35,65 @@ const getApprovers = async (userId) => {
   }
 };
 
+// ✅ NEW: Helper to get current month key
+const getCurrentMonthKey = (date = new Date()) => {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+// ✅ NEW: Helper to check monthly leave limits
+const checkMonthlyLeaveLimit = async (employee, leaveType, requestedDays, startDate) => {
+  const monthKey = getCurrentMonthKey(startDate);
+  
+  // Get monthly usage from employee record
+  const monthlyUsage = employee.monthlyLeaveUsage?.get(monthKey) || { annual: 0, casual: 0 };
+  
+  // ✅ Annual Leave: Max 2 days per month
+  if (leaveType === 'Annual Leave') {
+    const currentUsage = monthlyUsage.annual || 0;
+    const totalAfterRequest = currentUsage + requestedDays;
+    
+    if (totalAfterRequest > 2) {
+      return {
+        allowed: false,
+        message: `Annual Leave limit exceeded. You can only take 2 days per month. Current usage: ${currentUsage} days, Requested: ${requestedDays} days.`
+      };
+    }
+  }
+  
+  // ✅ Casual Leave: Max 5 days at a time OR per month
+  if (leaveType === 'Casual Leave') {
+    // Check single request limit
+    if (requestedDays > 5) {
+      return {
+        allowed: false,
+        message: `Casual Leave cannot exceed 5 days at a time. Requested: ${requestedDays} days.`
+      };
+    }
+    
+    // Check monthly limit
+    const currentUsage = monthlyUsage.casual || 0;
+    const totalAfterRequest = currentUsage + requestedDays;
+    
+    if (totalAfterRequest > 5) {
+      return {
+        allowed: false,
+        message: `Casual Leave monthly limit exceeded. You can only take 5 days per month. Current usage: ${currentUsage} days, Requested: ${requestedDays} days.`
+      };
+    }
+  }
+  
+  return { allowed: true };
+};
+
 // @desc    Apply for leave
 // @route   POST /api/leaves
 // @access  Private
 const applyLeave = async (req, res) => {
   try {
-    const { leaveType, startDate, endDate, reason } = req.body;
+    const { leaveType, startDate, endDate, reason, isHalfDay, halfDayDate } = req.body;
 
     console.log(`📝 Leave application from user: ${req.user._id}`);
+    console.log(`Leave Type: ${leaveType}, Half Day: ${isHalfDay}`);
 
     const user = await User.findById(req.user._id).populate('employeeId');
     
@@ -56,6 +107,53 @@ const applyLeave = async (req, res) => {
       return res.status(400).json({ message: 'Employee details not found' });
     }
 
+    // ✅ Handle Half Day application
+    if (leaveType === 'Half Day' || isHalfDay) {
+      const halfDate = halfDayDate || startDate;
+      
+      // Check if already applied for this day
+      const existingHalfDay = await Leave.findOne({
+        employee: employee._id,
+        isHalfDay: true,
+        halfDayDate: new Date(halfDate),
+        status: { $ne: 'Rejected' }
+      });
+      
+      if (existingHalfDay) {
+        return res.status(400).json({ 
+          message: 'Half day leave already applied for this date' 
+        });
+      }
+
+      // Get approvers
+      const approvers = await getApprovers(user._id);
+
+      // Create half day leave
+      const leave = await Leave.create({
+        employee: employee._id,
+        user: user._id,
+        leaveType: 'Half Day',
+        startDate: halfDate,
+        endDate: halfDate,
+        totalDays: 0.5,
+        isHalfDay: true,
+        halfDayDate: halfDate,
+        reason,
+        status: 'Pending',
+        approvers,
+      });
+
+      const populatedLeave = await Leave.findById(leave._id)
+        .populate('employee', 'firstName lastName employeeCode')
+        .populate('user', 'name email role')
+        .populate('approvers', 'name role');
+
+      console.log(`✅ Half day leave created with ID: ${leave._id}`);
+
+      return res.status(201).json(populatedLeave);
+    }
+
+    // ✅ Regular Leave Application
     // Calculate total days
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -63,22 +161,30 @@ const applyLeave = async (req, res) => {
 
     console.log(`📅 Leave duration: ${totalDays} days`);
 
-    // Check leave balance
+    // ✅ Map leave types to balance keys
     const leaveTypeMap = {
       'Casual Leave': 'casual',
       'Sick Leave': 'sick',
-      'Earned Leave': 'earned',
+      'Annual Leave': 'annual', // ✅ Changed from 'earned'
     };
 
     const leaveBalanceKey = leaveTypeMap[leaveType];
     
+    // ✅ Check leave balance
     if (leaveBalanceKey && employee.leaveBalance[leaveBalanceKey] !== undefined) {
       const availableBalance = employee.leaveBalance[leaveBalanceKey];
+      
       if (leaveType !== 'Unpaid Leave' && availableBalance < totalDays) {
         return res.status(400).json({ 
-          message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${totalDays} days` 
+          message: `Insufficient ${leaveType} balance. Available: ${availableBalance} days, Requested: ${totalDays} days` 
         });
       }
+    }
+
+    // ✅ Check monthly limits for Annual and Casual leave
+    const limitCheck = await checkMonthlyLeaveLimit(employee, leaveType, totalDays, start);
+    if (!limitCheck.allowed) {
+      return res.status(400).json({ message: limitCheck.message });
     }
 
     // ✅ Get approvers for this leave request
@@ -97,10 +203,10 @@ const applyLeave = async (req, res) => {
       totalDays,
       reason,
       status: 'Pending',
-      approvers, // ✅ Store who can approve this leave
+      approvers,
+      isHalfDay: false,
     });
 
-    // Populate the leave data
     const populatedLeave = await Leave.findById(leave._id)
       .populate('employee', 'firstName lastName employeeCode')
       .populate('user', 'name email role')
@@ -125,22 +231,17 @@ const getLeaves = async (req, res) => {
 
     console.log(`🔍 Getting leaves for user: ${req.user.name} (${req.user.role})`);
 
-    // ✅ Role-based filtering
+    // Role-based filtering
     if (req.user.role === 'Employee') {
-      // Regular employees see only their own leaves
       query.user = req.user._id;
       console.log(`👤 Employee view: Only own leaves`);
     } else if (req.user.role === 'Team Lead' || req.user.role === 'Business Lead') {
-      // ✅ Team/Business leads see:
-      // 1. Their own leaves
-      // 2. Leaves where they are an approver (their team members)
       query.$or = [
-        { user: req.user._id }, // Own leaves
-        { approvers: req.user._id } // Leaves they can approve
+        { user: req.user._id },
+        { approvers: req.user._id }
       ];
-      console.log(`👔 Leader view: Own leaves + team leaves where they are approver`);
+      console.log(`👔 Leader view: Own leaves + team leaves`);
     } else if (req.user.role === 'Admin' || req.user.role === 'HR') {
-      // Admin and HR see all leaves
       console.log(`👑 Admin/HR view: All leaves`);
     }
 
@@ -182,7 +283,7 @@ const getLeaveById = async (req, res) => {
       return res.status(404).json({ message: 'Leave not found' });
     }
 
-    // Check if user has permission to view this leave
+    // Check permissions
     const canView = 
       req.user.role === 'Admin' ||
       req.user.role === 'HR' ||
@@ -208,7 +309,6 @@ const updateLeaveStatus = async (req, res) => {
 
     console.log(`🔄 Updating leave ${req.params.id} to ${status} by ${req.user.name} (${req.user.role})`);
 
-    // ✅ FIX: Don't populate employee, just get the reference
     const leave = await Leave.findById(req.params.id)
       .populate('user', 'name role')
       .populate('approvers');
@@ -217,14 +317,10 @@ const updateLeaveStatus = async (req, res) => {
       return res.status(404).json({ message: 'Leave not found' });
     }
 
-    console.log(`📋 Leave approvers: ${leave.approvers.map(a => `${a.name} (${a.role})`).join(', ')}`);
-
-    // ✅ Check if user is authorized to approve this leave
+    // Check if user is authorized
     const isApprover = leave.approvers.some(
       approver => approver._id.toString() === req.user._id.toString()
     );
-
-    console.log(`🔐 Is user an approver? ${isApprover}`);
 
     if (!isApprover) {
       return res.status(403).json({ 
@@ -232,7 +328,6 @@ const updateLeaveStatus = async (req, res) => {
       });
     }
 
-    // ✅ Check if leave is already approved/rejected
     if (leave.status !== 'Pending') {
       return res.status(400).json({ 
         message: `Leave already ${leave.status.toLowerCase()} by ${leave.approvedBy?.name} (${leave.approvedByRole})` 
@@ -249,19 +344,21 @@ const updateLeaveStatus = async (req, res) => {
       leave.rejectionReason = rejectionReason;
     }
 
-    // ✅ If approved, update employee leave balance using findByIdAndUpdate
+    // ✅ If approved, update employee leave balance and monthly usage
     if (status === 'Approved') {
+      const employee = await Employee.findById(leave.employee);
+      
       const leaveTypeMap = {
         'Casual Leave': 'casual',
         'Sick Leave': 'sick',
-        'Earned Leave': 'earned',
+        'Annual Leave': 'annual',
         'Unpaid Leave': 'unpaid',
       };
 
       const leaveBalanceKey = leaveTypeMap[leave.leaveType];
       
+      // ✅ Deduct from balance (except unpaid)
       if (leaveBalanceKey && leaveBalanceKey !== 'unpaid') {
-        // ✅ Use findByIdAndUpdate with $inc operator to avoid validation issues
         await Employee.findByIdAndUpdate(
           leave.employee,
           {
@@ -274,11 +371,29 @@ const updateLeaveStatus = async (req, res) => {
         
         console.log(`✅ Deducted ${leave.totalDays} days from ${leaveBalanceKey} leave`);
       }
+
+      // ✅ Update monthly usage tracking for Annual and Casual leave
+      if (leave.leaveType === 'Annual Leave' || leave.leaveType === 'Casual Leave') {
+        const monthKey = getCurrentMonthKey(leave.startDate);
+        const usageKey = leave.leaveType === 'Annual Leave' ? 'annual' : 'casual';
+        
+        // Get current monthly usage
+        if (!employee.monthlyLeaveUsage) {
+          employee.monthlyLeaveUsage = new Map();
+        }
+        
+        const currentMonthUsage = employee.monthlyLeaveUsage.get(monthKey) || { annual: 0, casual: 0 };
+        currentMonthUsage[usageKey] = (currentMonthUsage[usageKey] || 0) + leave.totalDays;
+        
+        employee.monthlyLeaveUsage.set(monthKey, currentMonthUsage);
+        await employee.save();
+        
+        console.log(`✅ Updated monthly ${leave.leaveType} usage for ${monthKey}: ${currentMonthUsage[usageKey]} days`);
+      }
     }
 
     await leave.save();
 
-    // Populate the updated leave
     const updatedLeave = await Leave.findById(leave._id)
       .populate('employee', 'firstName lastName employeeCode')
       .populate('user', 'name email role')
@@ -305,7 +420,6 @@ const deleteLeave = async (req, res) => {
       return res.status(404).json({ message: 'Leave not found' });
     }
 
-    // Only the applicant can delete their own pending leave
     if (leave.user.toString() !== req.user._id.toString() || leave.status !== 'Pending') {
       return res.status(403).json({ 
         message: 'You can only delete your own pending leave requests' 
@@ -326,7 +440,6 @@ const getPendingApprovals = async (req, res) => {
   try {
     console.log(`🔍 Getting pending approvals for ${req.user.name} (${req.user.role})`);
     
-    // Find all pending leaves where current user is an approver
     const pendingLeaves = await Leave.find({
       status: 'Pending',
       approvers: req.user._id
@@ -345,6 +458,51 @@ const getPendingApprovals = async (req, res) => {
   }
 };
 
+// ✅ NEW: Get employee's monthly leave usage
+// @desc    Get monthly leave usage for an employee
+// @route   GET /api/leaves/monthly-usage/:employeeId?
+// @access  Private
+const getMonthlyLeaveUsage = async (req, res) => {
+  try {
+    let employeeId = req.params.employeeId;
+    
+    // If no employeeId provided, get for logged-in user
+    if (!employeeId) {
+      const user = await User.findById(req.user._id).populate('employeeId');
+      if (!user.employeeId) {
+        return res.status(400).json({ message: 'Employee record not found' });
+      }
+      employeeId = user.employeeId._id || user.employeeId;
+    }
+
+    const employee = await Employee.findById(employeeId);
+    if (!employee) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    const currentMonthKey = getCurrentMonthKey();
+    const monthlyUsage = employee.monthlyLeaveUsage?.get(currentMonthKey) || { annual: 0, casual: 0 };
+
+    res.json({
+      employeeId: employee._id,
+      currentMonth: currentMonthKey,
+      usage: monthlyUsage,
+      limits: {
+        annual: 2,
+        casual: 5,
+      },
+      remaining: {
+        annual: Math.max(0, 2 - (monthlyUsage.annual || 0)),
+        casual: Math.max(0, 5 - (monthlyUsage.casual || 0)),
+      },
+      balance: employee.leaveBalance,
+    });
+  } catch (error) {
+    console.error('❌ Error getting monthly leave usage:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   applyLeave,
   getLeaves,
@@ -352,4 +510,5 @@ module.exports = {
   updateLeaveStatus,
   deleteLeave,
   getPendingApprovals,
+  getMonthlyLeaveUsage, // ✅ Export new function
 };

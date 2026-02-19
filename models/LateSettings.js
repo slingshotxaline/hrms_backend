@@ -2,20 +2,16 @@ const mongoose = require('mongoose');
 
 const lateSettingsSchema = mongoose.Schema(
   {
-    // There should only be one settings document
     organization: {
       type: String,
       default: 'default',
       unique: true,
     },
-    // Deduction preference
+    // ✅ Deduction preference: Annual Leave or Salary
     deductionPreference: {
       type: String,
-      enum: ['Salary', 'Leave', 'Manual'],
-      default: 'Leave',
-      // Salary: Always deduct salary
-      // Leave: Deduct leave first, then salary if no leave
-      // Manual: Admin decides per case
+      enum: ['Salary', 'Annual Leave'], // ✅ Changed from 'Leave' to 'Annual Leave'
+      default: 'Annual Leave',
     },
     // Grace period settings
     graceDaysPerMonth: {
@@ -25,17 +21,21 @@ const lateSettingsSchema = mongoose.Schema(
     // Late threshold (minutes)
     lateThresholdMinutes: {
       type: Number,
-      default: 1, // 1+ minutes late counts as late
-    },
-    // Auto-approve for minor lates
-    autoApproveUnder: {
-      type: Number,
-      default: 0, // 0 means no auto-approve
+      default: 1,
     },
     // Enabled/disabled
     isEnabled: {
       type: Boolean,
       default: true,
+    },
+    // ✅ NEW: Half day settings
+    halfDayPunchTime: {
+      type: String,
+      default: '11:00', // After 11 AM = Half Day
+    },
+    halfDaysToFullDay: {
+      type: Number,
+      default: 2, // 2 half days = 1 full day deduction
     },
   },
   {

@@ -31,7 +31,7 @@ const payrollSchema = mongoose.Schema(
     deductions: {
       absent: { type: Number, default: 0 },
       halfDay: { type: Number, default: 0 },
-      late: { type: Number, default: 0 }, // ✅ ADD THIS
+      late: { type: Number, default: 0 },
       tax: { type: Number, default: 0 },
       other: { type: Number, default: 0 },
     },
@@ -41,7 +41,30 @@ const payrollSchema = mongoose.Schema(
     },
     overtime: {
       hours: { type: Number, default: 0 },
-      amount: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 }, // ✅ For information only, NOT added to net salary
+    },
+    // ✅ NEW: Manual adjustments
+    adjustments: [{
+      amount: {
+        type: Number,
+        required: true, // Positive = addition, Negative = deduction
+      },
+      description: {
+        type: String,
+        required: true,
+      },
+      addedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      addedAt: {
+        type: Date,
+        default: Date.now,
+      },
+    }],
+    totalAdjustments: {
+      type: Number,
+      default: 0,
     },
     netSalary: {
       type: Number,
@@ -52,8 +75,8 @@ const payrollSchema = mongoose.Schema(
       absent: { type: Number, default: 0 },
       leave: { type: Number, default: 0 },
       halfDay: { type: Number, default: 0 },
-      late: { type: Number, default: 0 }, // ✅ ADD THIS
-      lateApproved: { type: Number, default: 0 }, // ✅ ADD THIS
+      late: { type: Number, default: 0 },
+      lateApproved: { type: Number, default: 0 },
     },
     status: {
       type: String,
@@ -62,6 +85,39 @@ const payrollSchema = mongoose.Schema(
     },
     paidAt: {
       type: Date,
+    },
+    version: {
+      type: Number,
+      default: 1,
+    },
+    isRegenerated: {
+      type: Boolean,
+      default: false,
+    },
+    regenerationHistory: [{
+      regeneratedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      regeneratedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      reason: {
+        type: String,
+      },
+      previousNetSalary: {
+        type: Number,
+      },
+      newNetSalary: {
+        type: Number,
+      },
+      changes: {
+        type: Object,
+      }
+    }],
+    notes: {
+      type: String,
     },
   },
   {
